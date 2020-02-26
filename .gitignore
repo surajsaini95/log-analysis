@@ -1,0 +1,7 @@
+*.log
+*.class
+*.sc
+.idea
+target
+project/target
+project/project
