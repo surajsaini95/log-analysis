@@ -4,7 +4,7 @@ import java.io.File
 
 import akka.actor.SupervisorStrategy.{Escalate, Resume}
 import akka.actor.{Actor, ActorLogging, OneForOneStrategy, Props, SupervisorStrategy}
-import akka.pattern.{AskTimeoutException, ask}
+import akka.pattern.{AskTimeoutException, ask , pipe}
 import akka.routing.RoundRobinPool
 import akka.util.Timeout
 import scala.concurrent.ExecutionContext.Implicits.global
@@ -55,48 +55,25 @@ class PrimaryActor extends Actor with ActorLogging {
    */
   override def receive: Receive = {
 
-    case actorMessage: ActorMessage if actorMessage.action.equalsIgnoreCase("analyse") =>
+    case actorMessage: ActorMessage
+        if actorMessage.action.equalsIgnoreCase("analyse") =>
 
-      val list = getListOfFiles(actorMessage.path)
+              implicit val timeout: Timeout = Timeout(1.second)
 
-      implicit val timeout: Timeout = Timeout(2.second)
+              val list = getListOfFiles(actorMessage.path)
+              val analysingActor = context.actorOf(Props[SecondaryActor]
+                .withRouter(RoundRobinPool(3)), "analysingActor")
 
-      val analysingActor = context.actorOf(Props[SecondaryActor].withRouter(RoundRobinPool(3)).
-        withDispatcher("fixed-thread-pool"), "analysingActor")
+              val result = list.map(file => {
+                (analysingActor ? file).mapTo[FileAnalysisResult].recover {
+                  case askTimeoutException: AskTimeoutException => analysingActor ! askTimeoutException
+                    FileAnalysisResult(file.getName, -1, -1, -1)
+                }
+              })
+              val analysisResults = Future.sequence(result)
 
-      val result = list.map(file => {
-        (analysingActor ? file).mapTo[FileAnalysisResult].recover {
-          case askTimeoutException: AskTimeoutException => analysingActor ! askTimeoutException
-            FileAnalysisResult(file.getName, -1, -1, -1)
-        }
-      })
-
-      val analysisResults = Future.sequence(result)
-      analysisResults.map(res => log.info("\n" + res + "\nAverage error count per file is : " + getAvgErrorCount(res)))
-
-
-    case actorMessage: ActorMessage if actorMessage.action.equalsIgnoreCase("avgError") =>
-
-      val list = getListOfFiles(actorMessage.path)
-
-      implicit val timeout: Timeout = Timeout(2.second)
-
-      val workerActors: Int = 5
-      val analysingActor = context.actorOf(Props[SecondaryActor].
-        withRouter(RoundRobinPool(workerActors)).
-        withDispatcher("fixed-thread-pool"), name = "avgErrorCountingActor")
-
-      val result = list.map(file => {
-
-        (analysingActor ? file).mapTo[FileAnalysisResult].recover {
-          case askTimeoutException: AskTimeoutException => analysingActor ! askTimeoutException
-            FileAnalysisResult(file.getName, -1, -1, -1)
-        }
-      })
-
-      val avgErrorCountingResult = Future.sequence(result)
-      avgErrorCountingResult.map(avgErrorCounting => log.info("Average error count per file is : " + getAvgErrorCount(avgErrorCounting)))
-
+      val avgErrorCount = analysisResults.map(res => getAvgErrorCount(res)).pipeTo(sender)
+      avgErrorCount.map(avgErrCount => log.info(s"\nAnalysis Result\nAverage error count per file is : $avgErrCount"))
 
   }
 

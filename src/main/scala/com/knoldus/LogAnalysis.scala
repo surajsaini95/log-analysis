@@ -14,7 +14,7 @@ import scala.concurrent.duration._
  */
 object LogAnalysis extends App {
 
-  val system = ActorSystem("PrimaryActor")
+  val system = ActorSystem("LogAnalysisActorSystem")
 
   val props = Props[PrimaryActor]
 
@@ -36,8 +36,7 @@ object LogAnalysis extends App {
 
   val dirPath = "src/main/resources/log-files"
 
-  val primaryActor = system.actorOf(props.withRouter(RoundRobinPool(2, supervisorStrategy = mySupervisorStrategy)).
-    withDispatcher("fixed-thread-pool"), "primaryActor")
+  val primaryActor = system.actorOf(props, "primaryActor")
 
   system.scheduler.scheduleWithFixedDelay(1.second, 300.second, primaryActor, ActorMessage(dirPath, "analyse"))
 
